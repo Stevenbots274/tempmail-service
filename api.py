@@ -166,24 +166,9 @@ async def start_cleanup():
 
 # ==================== API ENDPOINTS ====================
 
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 async def root():
-    return {
-        "service": "TempMail API v2",
-        "domain": DOMAIN,
-        "expiry_seconds": EMAIL_EXPIRY,
-        "mode": "webhook" if not os.getenv("SMTP_PORT") else "smtp",
-        "endpoints": {
-            "generate": "GET /api/generate",
-            "inbox": "GET /api/inbox/{email}",
-            "message": "GET /api/message/{id}",
-            "delete": "DELETE /api/message/{id}",
-            "websocket": "WS /ws/{email}",
-            "webhook_mailgun": "POST /webhook/mailgun",
-            "webhook_postmark": "POST /webhook/postmark",
-            "webhook_generic": "POST /webhook/generic"
-        }
-    }
+    return await web_ui()
 
 @app.get("/api/generate")
 async def generate():
