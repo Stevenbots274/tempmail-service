@@ -23,6 +23,7 @@ import json
 import re
 import hmac
 import hashlib
+import random
 from datetime import datetime, timezone
 from typing import Optional, List
 from contextlib import asynccontextmanager
@@ -46,6 +47,21 @@ WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "change-me")
 
 if not DB_URL:
     raise ValueError("DATABASE_URL environment variable is required!")
+
+# ==================== NAMES LIST (TASK 2) ====================
+NAMES = [
+    "James", "Mary", "Robert", "Patricia", "John", "Jennifer", "Michael", "Linda", "David", "Elizabeth",
+    "William", "Barbara", "Richard", "Susan", "Joseph", "Jessica", "Thomas", "Sarah", "Christopher", "Karen",
+    "Charles", "Lisa", "Daniel", "Nancy", "Matthew", "Betty", "Anthony", "Margaret", "Mark", "Sandra",
+    "Donald", "Ashley", "Steven", "Kimberly", "Andrew", "Emily", "Paul", "Donna", "Joshua", "Michelle",
+    "Kenneth", "Dorothy", "Kevin", "Carol", "Brian", "Amanda", "George", "Melissa", "Timothy", "Deborah",
+    "Ronald", "Stephanie", "Edward", "Rebecca", "Jason", "Sharon", "Jeffrey", "Laura", "Ryan", "Cynthia",
+    "Jacob", "Kathleen", "Gary", "Amy", "Nicholas", "Angela", "Eric", "Shirley", "Jonathan", "Anna",
+    "Stephen", "Brenda", "Larry", "Pamela", "Justin", "Emma", "Scott", "Nicole", "Brandon", "Helen",
+    "Benjamin", "Samantha", "Samuel", "Katherine", "Gregory", "Christine", "Alexander", "Debra", "Frank", "Rachel",
+    "Patrick", "Carolyn", "Raymond", "Janet", "Jack", "Catherine", "Dennis", "Maria", "Jerry", "Heather",
+    "Carlos", "Sofia", "Yuki", "Hans", "Elena", "Mateo", "Hiroshi", "Isabella", "Luca", "Anya"
+]
 
 # ==================== DB SETUP ====================
 db_pool = None
@@ -176,7 +192,14 @@ async def root():
 
 @app.get("/api/generate")
 async def generate():
-    username = str(uuid.uuid4()).replace("-", "")[:12]
+    # TASK 2: Real Name Email Address Generator
+    name = random.choice(NAMES)
+    if random.random() < 0.3:
+        suffix = random.randint(10, 99)
+        username = f"{name}{suffix}"
+    else:
+        username = name
+    
     email = f"{username}@{DOMAIN}"
     return EmailAddr(email=email, expires_in=EMAIL_EXPIRY, created_at=datetime.now(timezone.utc).timestamp())
 
@@ -282,19 +305,19 @@ async def webhook_mailgun(request: Request):
 
     await store_email(
         recipient=form.get("recipient"),
-        sender=form.get("sender"),
+        sender=form.get("from"),
         subject=form.get("subject"),
         body_text=form.get("body-plain"),
         body_html=form.get("body-html"),
-        raw=form.get("body-plain"), # Mailgun doesn't send full raw by default
-        attachments=[] # Simplified
+        raw=form.get("body-plain", ""),
+        attachments=[]
     )
     return {"status": "ok"}
 
 @app.post("/webhook/postmark")
 async def webhook_postmark(request: Request):
     data = await request.json()
-    # Verify secret if set
+    # Verify secret if exists
     if POSTMARK_SECRET and request.headers.get("X-Postmark-Secret") != POSTMARK_SECRET:
         raise HTTPException(401, "Invalid secret")
 
@@ -358,6 +381,110 @@ async def webhook_raw(request: Request):
     )
     return {"status": "ok"}
 
+# ==================== API DOCUMENTATION (TASK 3) ====================
+@app.get("/api-docs", response_class=HTMLResponse)
+async def api_docs():
+    return """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>📚 TempMail API Documentation</title>
+        <style>
+            :root { --bg: #0f172a; --card: #1e293b; --text: #f8fafc; --primary: #38bdf8; --secondary: #94a3b8; --accent: #38bdf8; }
+            body { font-family: -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; line-height: 1.6; }
+            .container { max-width: 900px; margin: 0 auto; }
+            .header { text-align: center; margin-bottom: 40px; }
+            .card { background: var(--card); border-radius: 12px; padding: 24px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); margin-bottom: 24px; }
+            h1, h2, h3 { color: var(--primary); }
+            .endpoint { border-left: 4px solid var(--primary); padding-left: 15px; margin-bottom: 30px; }
+            .method { font-weight: bold; padding: 4px 8px; border-radius: 4px; margin-right: 10px; font-size: 0.9em; }
+            .get { background: #0ea5e9; color: white; }
+            .post { background: #10b981; color: white; }
+            .delete { background: #ef4444; color: white; }
+            .path { font-family: monospace; font-size: 1.1em; color: var(--text); }
+            pre { background: #0f172a; padding: 15px; border-radius: 8px; overflow-x: auto; border: 1px solid #334155; }
+            code { font-family: 'Fira Code', monospace; color: #e2e8f0; }
+            .back-link { display: inline-block; margin-bottom: 20px; color: var(--secondary); text-decoration: none; font-size: 0.9em; }
+            .back-link:hover { color: var(--primary); }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <a href="/" class="back-link">← Back to Web UI</a>
+            <div class="header">
+                <h1>📚 API Documentation</h1>
+                <p>Integrate TempMail into your own applications</p>
+            </div>
+
+            <div class="card">
+                <h2>Overview</h2>
+                <p>All API requests should be made to the base URL of this service. The API returns JSON responses unless otherwise specified.</p>
+            </div>
+
+            <div class="card">
+                <h2>Endpoints</h2>
+
+                <div class="endpoint">
+                    <span class="method get">GET</span> <span class="path">/api/generate</span>
+                    <p>Generate a random email address with a real-sounding name.</p>
+                    <h3>Example Request</h3>
+                    <pre><code>GET /api/generate</code></pre>
+                    <h3>Example Response</h3>
+                    <pre><code>{
+  "email": "Emma@phoeniximagebot.qzz.io",
+  "expires_in": 300,
+  "created_at": 1715082400.0
+}</code></pre>
+                </div>
+
+                <div class="endpoint">
+                    <span class="method get">GET</span> <span class="path">/api/generate/{custom}</span>
+                    <p>Generate a custom email address.</p>
+                    <h3>Example Request</h3>
+                    <pre><code>GET /api/generate/myname</code></pre>
+                </div>
+
+                <div class="endpoint">
+                    <span class="method get">GET</span> <span class="path">/api/inbox/{email}</span>
+                    <p>Retrieve all messages for a specific email address.</p>
+                    <h3>Example Request</h3>
+                    <pre><code>GET /api/inbox/Emma@phoeniximagebot.qzz.io</code></pre>
+                </div>
+
+                <div class="endpoint">
+                    <span class="method get">GET</span> <span class="path">/api/message/{msg_id}</span>
+                    <p>Get full details of a single message by its ID.</p>
+                </div>
+
+                <div class="endpoint">
+                    <span class="method delete">DELETE</span> <span class="path">/api/message/{msg_id}</span>
+                    <p>Delete a specific message.</p>
+                </div>
+
+                <div class="endpoint">
+                    <span class="method get">GET</span> <span class="path">/api/stats</span>
+                    <p>Get service-wide statistics.</p>
+                </div>
+
+                <div class="endpoint">
+                    <span class="method get">WS</span> <span class="path">/ws/{email}</span>
+                    <p>WebSocket endpoint for real-time email notifications.</p>
+                </div>
+
+                <div class="endpoint">
+                    <span class="method post">POST</span> <span class="path">/webhook/raw</span>
+                    <p>Webhook for receiving raw email content. Requires <code>X-Secret</code> header.</p>
+                    <h3>Headers</h3>
+                    <pre><code>X-Secret: your-webhook-secret</code></pre>
+                </div>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+
 # ==================== WEB UI ====================
 async def web_ui():
     return """
@@ -392,6 +519,9 @@ async def web_ui():
             .close-modal { position: absolute; top: 20px; right: 20px; font-size: 24px; cursor: pointer; color: var(--secondary); }
             .controls { display: flex; gap: 10px; margin-top: 20px; }
             input { background: #0f172a; border: 1px solid #334155; color: white; padding: 8px 12px; border-radius: 6px; width: 150px; }
+            .footer { text-align: center; margin-top: 40px; font-size: 0.8em; color: var(--secondary); }
+            .footer a { color: var(--primary); text-decoration: none; }
+            #autoRefreshStatus { font-size: 0.8em; color: #10b981; font-weight: bold; margin-left: 10px; }
         </style>
     </head>
     <body>
@@ -418,13 +548,20 @@ async def web_ui():
 
             <div class="card">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
-                    <h2 style="margin:0;">Inbox</h2>
+                    <div style="display:flex; align-items:center;">
+                        <h2 style="margin:0;">Inbox</h2>
+                        <span id="autoRefreshStatus">Auto-refresh: ON</span>
+                    </div>
                     <span id="msgCount" style="color:var(--secondary);">0 messages</span>
                     <button class="btn btn-outline" id="refreshBtn" onclick="loadMessages()">🔄 Refresh</button>
                 </div>
                 <div id="messages" class="msg-list">
                     <div class="empty">No messages yet. Send an email to your address!</div>
                 </div>
+            </div>
+
+            <div class="footer">
+                <p>TempMail Service &copy; 2024 | <a href="/api-docs">API Documentation</a></p>
             </div>
         </div>
 
@@ -440,6 +577,7 @@ async def web_ui():
             let currentEmail = '';
             let expiryTime = 0;
             let timerInterval = null;
+            let autoRefreshInterval = null;
             let ws = null;
             let messages = [];
 
@@ -486,6 +624,7 @@ async def web_ui():
                 document.getElementById('email').textContent = data.email;
                 document.getElementById('status').textContent = '✅ Active! Send emails to this address.';
                 startTimer();
+                startAutoRefresh();
                 connectWS();
                 loadMessages();
             }
@@ -500,8 +639,25 @@ async def web_ui():
                         : '⏱️ Expired - generate new email';
                     if (remaining <= 0) {
                         localStorage.removeItem('tempmail_data');
+                        stopAutoRefresh();
                     }
                 }, 1000);
+            }
+
+            // TASK 1: Auto-refresh Inbox
+            function startAutoRefresh() {
+                if (autoRefreshInterval) clearInterval(autoRefreshInterval);
+                autoRefreshInterval = setInterval(() => {
+                    if (currentEmail) {
+                        loadMessages();
+                    }
+                }, 10000); // 10 seconds
+            }
+
+            function stopAutoRefresh() {
+                if (autoRefreshInterval) clearInterval(autoRefreshInterval);
+                document.getElementById('autoRefreshStatus').textContent = 'Auto-refresh: OFF';
+                document.getElementById('autoRefreshStatus').style.color = '#ef4444';
             }
 
             function copyEmail() {
@@ -538,6 +694,7 @@ async def web_ui():
             async function loadMessages() {
                 if (!currentEmail) return;
                 const btn = document.getElementById('refreshBtn');
+                const originalText = btn.textContent;
                 btn.textContent = '⌛ Loading...';
                 try {
                     const res = await fetch('/api/inbox/' + encodeURIComponent(currentEmail));
