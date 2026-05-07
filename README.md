@@ -88,26 +88,37 @@ WEBHOOK_SECRET=your-random-secret-key
    - **OR** use Cloudflare Workers to POST to your webhook endpoint
 
 3. **Cloudflare Worker for webhook forwarding:**
-   ```javascript
-   export default {
-     async email(message, env, ctx) {
-       await fetch('https://your-app.up.railway.app/webhook/generic', {
-         method: 'POST',
-         headers: {
-           'Content-Type': 'application/json',
-           'X-Secret': 'your-random-secret-key'
-         },
-         body: JSON.stringify({
-           to: message.to,
-           from: message.from,
-           subject: message.headers.get('subject'),
-           text: await message.text(),
-           html: await message.html()
-         })
-       });
-     }
-   };
-   ```
+    Use the `worker.js` file provided in this repo. It uses the `/webhook/raw` endpoint which is more reliable for Cloudflare Workers.
+
+    ```javascript
+    export default {
+      async email(message, env, ctx) {
+        const url = env.WEBHOOK_URL || 'https://phoeniximagebot.qzz.io/webhook/raw';
+        const secret = env.WEBHOOK_SECRET || '';
+
+        const rawEmail = await new Response(message.raw).text();
+
+        const payload = {
+          to: message.to,
+          from: message.from,
+          raw: rawEmail
+        };
+
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Secret': secret
+          },
+          body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+          console.error('Failed to forward email:', await response.text());
+        }
+      }
+    };
+    ```
 
 #### Using Mailgun (FREE - 5K emails/mo)
 

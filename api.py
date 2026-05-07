@@ -124,16 +124,19 @@ class EmailMsg(BaseModel):
 # ==================== CORE FUNCTIONS ====================
 async def store_email(recipient: str, sender: str, subject: str, body_text: str, body_html: str, raw: str, attachments: list):
     """Store email and notify WebSocket clients"""
-    conn = await asyncpg.connect(DB_URL)
+    global db_pool
+    if not db_pool:
+        db_pool = await asyncpg.create_pool(DB_URL, min_size=5, max_size=20)
+    
     eid = str(uuid.uuid4())
     now = datetime.now(timezone.utc).timestamp()
     expires = now + EMAIL_EXPIRY
 
-    await conn.execute("""
-        INSERT INTO emails (id, recipient, sender, subject, body_text, body_html, raw_content, attachments, received_at, expires_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-    """, eid, recipient.lower(), sender, subject, body_text, body_html, raw, json.dumps(attachments), now, expires)
-    await conn.close()
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO emails (id, recipient, sender, subject, body_text, body_html, raw_content, attachments, received_at, expires_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        """, eid, recipient.lower(), sender, subject, body_text, body_html, raw, json.dumps(attachments), now, expires)
 
     # Notify WebSocket clients
     await ws_manager.notify(recipient.lower(), {
@@ -152,10 +155,11 @@ async def cleanup_expired():
     while True:
         await asyncio.sleep(30)
         try:
-            conn = await asyncpg.connect(DB_URL)
-            now = datetime.now(timezone.utc).timestamp()
-            await conn.execute("DELETE FROM emails WHERE expires_at < $1", now)
-            await conn.close()
+            global db_pool
+            if db_pool:
+                now = datetime.now(timezone.utc).timestamp()
+                async with db_pool.acquire() as conn:
+                    await conn.execute("DELETE FROM emails WHERE expires_at < $1", now)
         except:
             pass
 
@@ -278,158 +282,185 @@ async def webhook_mailgun(request: Request):
 
     await store_email(
         recipient=form.get("recipient"),
-        sender=form.get("from"),
+        sender=form.get("sender"),
         subject=form.get("subject"),
-        body_text=form.get("body-plain", ""),
-        body_html=form.get("body-html", ""),
-        raw=json.dumps(dict(form)),
-        attachments=[] # Mailgun attachments need separate handling
+        body_text=form.get("body-plain"),
+        body_html=form.get("body-html"),
+        raw=form.get("body-plain"), # Mailgun doesn't send full raw by default
+        attachments=[] # Simplified
     )
     return {"status": "ok"}
 
 @app.post("/webhook/postmark")
 async def webhook_postmark(request: Request):
     data = await request.json()
+    # Verify secret if set
+    if POSTMARK_SECRET and request.headers.get("X-Postmark-Secret") != POSTMARK_SECRET:
+        raise HTTPException(401, "Invalid secret")
+
     await store_email(
         recipient=data.get("To"),
         sender=data.get("From"),
         subject=data.get("Subject"),
-        body_text=data.get("TextBody", ""),
-        body_html=data.get("HtmlBody", ""),
-        raw=json.dumps(data),
+        body_text=data.get("TextBody"),
+        body_html=data.get("HtmlBody"),
+        raw=data.get("RawEmail"),
         attachments=data.get("Attachments", [])
     )
     return {"status": "ok"}
 
-@app.post("/webhook/generic")
-async def webhook_generic(request: Request, secret: Optional[str] = None):
-    if secret and secret != WEBHOOK_SECRET:
-        raise HTTPException(401, "Invalid secret")
+@app.post("/webhook/raw")
+async def webhook_raw(request: Request):
+    """Handle raw email content (ideal for Cloudflare Workers)"""
+    # Verify secret from header
+    header_secret = request.headers.get("X-Secret")
+    if WEBHOOK_SECRET and WEBHOOK_SECRET != "change-me":
+        if header_secret != WEBHOOK_SECRET:
+            raise HTTPException(401, "Invalid secret")
+            
+    import email
+    from email import policy
+    
     data = await request.json()
+    raw_content = data.get("raw", "")
+    if not raw_content:
+        raise HTTPException(400, "No raw content provided")
+        
+    msg = email.message_from_string(raw_content, policy=policy.default)
+    
+    subject = msg.get("Subject", "No Subject")
+    sender = msg.get("From", data.get("from", "Unknown"))
+    recipient = data.get("to") or msg.get("To") or "unknown@domain.com"
+    
+    body_text = ""
+    body_html = ""
+    attachments = []
+    
+    if msg.is_multipart():
+        for part in msg.walk():
+            ctype = part.get_content_type()
+            cdisp = str(part.get("Content-Disposition"))
+            if ctype == "text/plain" and "attachment" not in cdisp:
+                body_text += part.get_payload(decode=True).decode(errors="ignore")
+            elif ctype == "text/html" and "attachment" not in cdisp:
+                body_html += part.get_payload(decode=True).decode(errors="ignore")
+    else:
+        body_text = msg.get_payload(decode=True).decode(errors="ignore")
+        
     await store_email(
-        recipient=data.get("to") or data.get("recipient"),
-        sender=data.get("from") or data.get("sender"),
-        subject=data.get("subject"),
-        body_text=data.get("body_text") or data.get("text", ""),
-        body_html=data.get("body_html") or data.get("html", ""),
-        raw=json.dumps(data),
-        attachments=data.get("attachments", [])
+        recipient=recipient,
+        sender=sender,
+        subject=subject,
+        body_text=body_text,
+        body_html=body_html,
+        raw=raw_content,
+        attachments=attachments
     )
     return {"status": "ok"}
 
 # ==================== WEB UI ====================
-@app.get("/web", response_class=HTMLResponse)
 async def web_ui():
     return """
     <!DOCTYPE html>
-    <html>
+    <html lang="en">
     <head>
-        <title>TempMail</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>🔒 TempMail Service</title>
         <style>
-            * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0a0a1a; color: #e0e0e0; padding: 20px; min-height: 100vh; }
-            .container { max-width: 900px; margin: 0 auto; }
-            h1 { text-align: center; margin-bottom: 10px; background: linear-gradient(90deg, #00ff88, #00ccff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-size: 2.5em; }
-            .subtitle { text-align: center; color: #888; margin-bottom: 30px; }
-            .card { background: #121228; border: 1px solid #1e1e3f; border-radius: 16px; padding: 25px; margin-bottom: 25px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-            .email-display { background: #0a0a1a; border: 2px dashed #1e1e3f; border-radius: 12px; padding: 20px; font-size: 1.5em; color: #00ff88; text-align: center; font-weight: 700; word-break: break-all; margin: 15px 0; position: relative; }
-            .timer { text-align: center; color: #ff6b6b; font-size: 0.95em; margin: 10px 0; }
-            .btn-group { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 15px; }
-            button { background: linear-gradient(135deg, #00ff88, #00cc6a); color: #000; border: none; padding: 12px 24px; border-radius: 10px; cursor: pointer; font-weight: 700; font-size: 0.95em; transition: transform 0.2s, box-shadow 0.2s; }
-            button:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,255,136,0.3); }
-            button.secondary { background: #1e1e3f; color: #00ff88; border: 1px solid #00ff88; }
-            button.secondary:hover { background: #00ff88; color: #000; }
-            input { padding: 12px; border-radius: 10px; border: 1px solid #333; background: #0a0a1a; color: #fff; width: 200px; font-size: 0.95em; }
-            input:focus { outline: none; border-color: #00ff88; }
-            .status { text-align: center; color: #00ff88; margin: 15px 0; min-height: 24px; }
-            .messages { margin-top: 10px; }
-            .message { background: #121228; border: 1px solid #1e1e3f; border-radius: 12px; padding: 18px; margin-bottom: 12px; border-left: 4px solid #00ff88; transition: all 0.2s; }
-            .message:hover { border-color: #00ff88; transform: translateX(4px); }
-            .msg-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 8px; }
-            .sender { color: #888; font-size: 0.85em; }
-            .subject { font-weight: 700; font-size: 1.1em; color: #fff; margin-bottom: 8px; }
-            .preview { color: #aaa; font-size: 0.9em; line-height: 1.5; }
-            .empty { text-align: center; color: #555; padding: 50px; font-size: 1.1em; }
-            .badge { background: #1e1e3f; color: #00ff88; padding: 4px 10px; border-radius: 20px; font-size: 0.75em; }
-            .count-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
-            .count { color: #888; }
-            @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
-            .live { animation: pulse 2s infinite; color: #00ff88; }
-            .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; justify-content: center; align-items: center; }
-            .modal-content { background: #121228; border: 1px solid #1e1e3f; border-radius: 16px; padding: 30px; max-width: 700px; width: 90%; max-height: 80vh; overflow-y: auto; }
-            .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-            .close-btn { background: none; border: none; color: #888; font-size: 1.5em; cursor: pointer; padding: 0; }
-            .close-btn:hover { color: #fff; }
-            .modal-body { color: #ccc; line-height: 1.7; }
-            .modal-body pre { background: #0a0a1a; padding: 15px; border-radius: 8px; overflow-x: auto; font-size: 0.85em; }
-            #refreshBtn { background: #1e1e3f; color: #00ff88; padding: 6px 12px; border-radius: 8px; font-size: 0.85em; border: 1px solid #1e1e3f; }
-            #refreshBtn:hover { border-color: #00ff88; }
+            :root { --bg: #0f172a; --card: #1e293b; --text: #f8fafc; --primary: #38bdf8; --secondary: #94a3b8; }
+            body { font-family: -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; line-height: 1.5; }
+            .container { max-width: 800px; margin: 0 auto; }
+            .header { text-align: center; margin-bottom: 40px; }
+            .card { background: var(--card); border-radius: 12px; padding: 24px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); margin-bottom: 24px; }
+            .email-box { display: flex; align-items: center; justify-content: space-between; background: #0f172a; padding: 12px 20px; border-radius: 8px; border: 1px solid #334155; }
+            #email { font-family: monospace; font-size: 1.2em; color: var(--primary); font-weight: bold; }
+            .btn { background: var(--primary); color: #0f172a; border: none; padding: 10px 20px; border-radius: 6px; font-weight: bold; cursor: pointer; transition: opacity 0.2s; }
+            .btn:hover { opacity: 0.9; }
+            .btn-outline { background: transparent; border: 1px solid var(--primary); color: var(--primary); }
+            .msg-list { display: flex; flex-direction: column; gap: 12px; }
+            .message { background: #0f172a; padding: 16px; border-radius: 8px; border: 1px solid #334155; transition: border-color 0.2s; }
+            .message:hover { border-color: var(--primary); }
+            .msg-header { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 0.9em; color: var(--secondary); }
+            .sender { font-weight: bold; color: var(--text); }
+            .subject { font-size: 1.1em; font-weight: bold; margin-bottom: 4px; }
+            .preview { font-size: 0.9em; color: var(--secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+            .empty { text-align: center; padding: 40px; color: var(--secondary); }
+            #status { font-size: 0.9em; margin-top: 8px; color: var(--primary); }
+            .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); align-items: center; justify-content: center; padding: 20px; z-index: 100; }
+            .modal-content { background: var(--card); max-width: 700px; width: 100%; max-height: 90vh; overflow-y: auto; border-radius: 12px; padding: 30px; position: relative; }
+            .close-modal { position: absolute; top: 20px; right: 20px; font-size: 24px; cursor: pointer; color: var(--secondary); }
+            .controls { display: flex; gap: 10px; margin-top: 20px; }
+            input { background: #0f172a; border: 1px solid #334155; color: white; padding: 8px 12px; border-radius: 6px; width: 150px; }
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>🔒 TempMail</h1>
-            <p class="subtitle">Temporary email addresses that auto-expire</p>
+            <div class="header">
+                <h1>🔒 TempMail Service</h1>
+                <p>Your secure, disposable email address</p>
+            </div>
 
             <div class="card">
-                <p style="text-align:center;color:#888;margin-bottom:10px;">Your temporary email address:</p>
-                <div class="email-display" id="email">Loading...</div>
-                <div class="timer" id="timer"></div>
-                <div class="status" id="status"></div>
-                <div class="btn-group">
-                    <button onclick="generateEmail(true)">🎲 New Random</button>
-                    <input type="text" id="customInput" placeholder="custom-name" maxlength="30">
-                    <button onclick="generateCustom()">✏️ Custom</button>
-                    <button class="secondary" onclick="copyEmail()">📋 Copy</button>
+                <div class="email-box">
+                    <span id="email">Loading...</span>
+                    <button class="btn btn-outline" onclick="copyEmail()">Copy</button>
+                </div>
+                <div id="status">Generating address...</div>
+                <div id="timer" style="margin-top:10px; font-size:0.9em; color:var(--secondary);"></div>
+                
+                <div class="controls">
+                    <button class="btn" onclick="generateNew()">New Random</button>
+                    <input type="text" id="customInput" placeholder="custom-name">
+                    <button class="btn btn-outline" onclick="generateCustom()">Use Custom</button>
                 </div>
             </div>
 
             <div class="card">
-                <div class="count-header">
-                    <div class="count">
-                        <span class="badge live">● LIVE</span>
-                        <span id="msgCount">0 messages</span>
-                    </div>
-                    <button id="refreshBtn" onclick="loadMessages()">🔄 Refresh</button>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+                    <h2 style="margin:0;">Inbox</h2>
+                    <span id="msgCount" style="color:var(--secondary);">0 messages</span>
+                    <button class="btn btn-outline" id="refreshBtn" onclick="loadMessages()">🔄 Refresh</button>
                 </div>
-                <div class="messages" id="messages">
+                <div id="messages" class="msg-list">
                     <div class="empty">No messages yet. Send an email to your address!</div>
                 </div>
             </div>
         </div>
 
-        <div class="modal" id="modal">
+        <div id="modal" class="modal">
             <div class="modal-content">
-                <div class="modal-header">
-                    <h3 id="modalSubject">Email Details</h3>
-                    <button class="close-btn" onclick="closeModal()">&times;</button>
-                </div>
-                <div class="modal-body" id="modalBody"></div>
+                <span class="close-modal" onclick="closeModal()">&times;</span>
+                <h2 id="modalSubject"></h2>
+                <div id="modalBody"></div>
             </div>
         </div>
 
         <script>
-            let currentEmail = null, ws = null, expiryTime = null, timerInterval = null, messages = [];
+            let currentEmail = '';
+            let expiryTime = 0;
+            let timerInterval = null;
+            let ws = null;
+            let messages = [];
 
             async function init() {
                 const saved = localStorage.getItem('tempmail_data');
                 if (saved) {
                     const data = JSON.parse(saved);
-                    // Check if still valid (roughly)
-                    if (Date.now() < data.saved_at + (data.expires_in * 1000)) {
+                    const now = Date.now();
+                    if (now < (data.saved_at + (data.expires_in * 1000))) {
                         setEmail(data, false);
                         return;
                     }
                 }
-                generateEmail(false);
+                generateNew();
             }
 
-            async function generateEmail(force = true) {
+            async function generateNew() {
                 document.getElementById('status').textContent = 'Generating...';
                 const res = await fetch('/api/generate');
                 const data = await res.json();
-                setEmail(data, true);
+                setEmail(data);
             }
 
             async function generateCustom() {
