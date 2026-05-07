@@ -383,14 +383,16 @@ async def webhook_raw(request: Request):
 
 # ==================== API DOCUMENTATION (TASK 3) ====================
 @app.get("/api-docs", response_class=HTMLResponse)
-async def api_docs():
-    return """
+async def api_docs(request: Request):
+    base_url = f"{request.url.scheme}://{request.url.netloc}"
+    return f"""
     <!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>📚 TempMail API Documentation</title>
+        <link rel="icon" type="image/x-icon" href="https://files.manuscdn.com/user_upload_by_module/session_file/310519663193300108/iiBpozThzpvnKSta.ico">
         <style>
             :root { --bg: #0f172a; --card: #1e293b; --text: #f8fafc; --primary: #38bdf8; --secondary: #94a3b8; --accent: #38bdf8; }
             body { font-family: -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; line-height: 1.6; }
@@ -408,19 +410,22 @@ async def api_docs():
             code { font-family: 'Fira Code', monospace; color: #e2e8f0; }
             .back-link { display: inline-block; margin-bottom: 20px; color: var(--secondary); text-decoration: none; font-size: 0.9em; }
             .back-link:hover { color: var(--primary); }
+            .logo { width: 60px; height: 60px; margin-bottom: 15px; }
         </style>
     </head>
     <body>
         <div class="container">
             <a href="/" class="back-link">← Back to Web UI</a>
             <div class="header">
-                <h1>📚 API Documentation</h1>
+                <img src="https://files.manuscdn.com/user_upload_by_module/session_file/310519663193300108/TLzfpVsaiulacTgT.png" alt="TempMail Logo" class="logo">
+                <h1>API Documentation</h1>
                 <p>Integrate TempMail into your own applications</p>
             </div>
 
             <div class="card">
                 <h2>Overview</h2>
                 <p>All API requests should be made to the base URL of this service. The API returns JSON responses unless otherwise specified.</p>
+                <p><strong>Base URL:</strong> <code>{base_url}</code></p>
             </div>
 
             <div class="card">
@@ -430,7 +435,7 @@ async def api_docs():
                     <span class="method get">GET</span> <span class="path">/api/generate</span>
                     <p>Generate a random email address with a real-sounding name.</p>
                     <h3>Example Request</h3>
-                    <pre><code>GET /api/generate</code></pre>
+                    <pre><code>curl {base_url}/api/generate</code></pre>
                     <h3>Example Response</h3>
                     <pre><code>{
   "email": "Emma@phoeniximagebot.qzz.io",
@@ -443,14 +448,14 @@ async def api_docs():
                     <span class="method get">GET</span> <span class="path">/api/generate/{custom}</span>
                     <p>Generate a custom email address.</p>
                     <h3>Example Request</h3>
-                    <pre><code>GET /api/generate/myname</code></pre>
+                    <pre><code>curl {base_url}/api/generate/myname</code></pre>
                 </div>
 
                 <div class="endpoint">
                     <span class="method get">GET</span> <span class="path">/api/inbox/{email}</span>
                     <p>Retrieve all messages for a specific email address.</p>
                     <h3>Example Request</h3>
-                    <pre><code>GET /api/inbox/Emma@phoeniximagebot.qzz.io</code></pre>
+                    <pre><code>curl {base_url}/api/inbox/Emma@phoeniximagebot.qzz.io</code></pre>
                 </div>
 
                 <div class="endpoint">
@@ -475,9 +480,13 @@ async def api_docs():
 
                 <div class="endpoint">
                     <span class="method post">POST</span> <span class="path">/webhook/raw</span>
-                    <p>Webhook for receiving raw email content. Requires <code>X-Secret</code> header.</p>
-                    <h3>Headers</h3>
-                    <pre><code>X-Secret: your-webhook-secret</code></pre>
+                    <p>Webhook for receiving raw email content. Optional <code>X-Secret</code> header for verification.</p>
+                    <h3>Example Request</h3>
+                    <pre><code>curl -X POST {base_url}/webhook/raw \\\n  -H "Content-Type: application/json" \\\n  -d '{{
+    "to": "user@phoeniximagebot.qzz.io",
+    "from": "sender@example.com",
+    "raw": "<raw email content>"
+  }}'</code></pre>
                 </div>
             </div>
         </div>
@@ -494,6 +503,7 @@ async def web_ui():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>🔒 TempMail Service</title>
+        <link rel="icon" type="image/x-icon" href="https://files.manuscdn.com/user_upload_by_module/session_file/310519663193300108/iiBpozThzpvnKSta.ico">
         <style>
             :root { --bg: #0f172a; --card: #1e293b; --text: #f8fafc; --primary: #38bdf8; --secondary: #94a3b8; }
             body { font-family: -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; line-height: 1.5; }
@@ -522,12 +532,14 @@ async def web_ui():
             .footer { text-align: center; margin-top: 40px; font-size: 0.8em; color: var(--secondary); }
             .footer a { color: var(--primary); text-decoration: none; }
             #autoRefreshStatus { font-size: 0.8em; color: #10b981; font-weight: bold; margin-left: 10px; }
+            .logo { width: 80px; height: 80px; margin-bottom: 20px; }
         </style>
     </head>
     <body>
         <div class="container">
             <div class="header">
-                <h1>🔒 TempMail Service</h1>
+                <img src="https://files.manuscdn.com/user_upload_by_module/session_file/310519663193300108/TLzfpVsaiulacTgT.png" alt="TempMail Logo" class="logo">
+                <h1>TempMail Service</h1>
                 <p>Your secure, disposable email address</p>
             </div>
 
