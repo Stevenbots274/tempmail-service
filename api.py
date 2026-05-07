@@ -385,16 +385,16 @@ async def webhook_raw(request: Request):
 @app.get("/api-docs", response_class=HTMLResponse)
 async def api_docs(request: Request):
     base_url = f"{request.url.scheme}://{request.url.netloc}"
-    return f"""
+    html = """
     <!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>📚 TempMail API Documentation</title>
+        <title>TempMail API Documentation</title>
         <link rel="icon" type="image/x-icon" href="https://files.manuscdn.com/user_upload_by_module/session_file/310519663193300108/iiBpozThzpvnKSta.ico">
         <style>
-            :root { --bg: #0f172a; --card: #1e293b; --text: #f8fafc; --primary: #38bdf8; --secondary: #94a3b8; --accent: #38bdf8; }
+            :root { --bg: #0f172a; --card: #1e293b; --text: #f8fafc; --primary: #38bdf8; --secondary: #94a3b8; }
             body { font-family: -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; line-height: 1.6; }
             .container { max-width: 900px; margin: 0 auto; }
             .header { text-align: center; margin-bottom: 40px; }
@@ -405,9 +405,10 @@ async def api_docs(request: Request):
             .get { background: #0ea5e9; color: white; }
             .post { background: #10b981; color: white; }
             .delete { background: #ef4444; color: white; }
+            .ws { background: #8b5cf6; color: white; }
             .path { font-family: monospace; font-size: 1.1em; color: var(--text); }
             pre { background: #0f172a; padding: 15px; border-radius: 8px; overflow-x: auto; border: 1px solid #334155; }
-            code { font-family: 'Fira Code', monospace; color: #e2e8f0; }
+            code { font-family: monospace; color: #e2e8f0; }
             .back-link { display: inline-block; margin-bottom: 20px; color: var(--secondary); text-decoration: none; font-size: 0.9em; }
             .back-link:hover { color: var(--primary); }
             .logo { width: 60px; height: 60px; margin-bottom: 15px; }
@@ -415,17 +416,12 @@ async def api_docs(request: Request):
     </head>
     <body>
         <div class="container">
-            <a href="/" class="back-link">← Back to Web UI</a>
+            <a href="/" class="back-link">Back to Web UI</a>
             <div class="header">
                 <img src="https://files.manuscdn.com/user_upload_by_module/session_file/310519663193300108/TLzfpVsaiulacTgT.png" alt="TempMail Logo" class="logo">
                 <h1>API Documentation</h1>
+                <p>Base URL: <code>__BASE_URL__</code></p>
                 <p>Integrate TempMail into your own applications</p>
-            </div>
-
-            <div class="card">
-                <h2>Overview</h2>
-                <p>All API requests should be made to the base URL of this service. The API returns JSON responses unless otherwise specified.</p>
-                <p><strong>Base URL:</strong> <code>{base_url}</code></p>
             </div>
 
             <div class="card">
@@ -435,64 +431,67 @@ async def api_docs(request: Request):
                     <span class="method get">GET</span> <span class="path">/api/generate</span>
                     <p>Generate a random email address with a real-sounding name.</p>
                     <h3>Example Request</h3>
-                    <pre><code>curl {base_url}/api/generate</code></pre>
+                    <pre><code>curl __BASE_URL__/api/generate</code></pre>
                     <h3>Example Response</h3>
-                    <pre><code>{
-  "email": "Emma@phoeniximagebot.qzz.io",
-  "expires_in": 300,
-  "created_at": 1715082400.0
-}</code></pre>
+                    <pre><code>{"email": "Emma@phoeniximagebot.qzz.io", "expires_in": 300, "created_at": 1715082400.0}</code></pre>
                 </div>
 
                 <div class="endpoint">
                     <span class="method get">GET</span> <span class="path">/api/generate/{custom}</span>
                     <p>Generate a custom email address.</p>
                     <h3>Example Request</h3>
-                    <pre><code>curl {base_url}/api/generate/myname</code></pre>
+                    <pre><code>curl __BASE_URL__/api/generate/myname</code></pre>
                 </div>
 
                 <div class="endpoint">
                     <span class="method get">GET</span> <span class="path">/api/inbox/{email}</span>
                     <p>Retrieve all messages for a specific email address.</p>
                     <h3>Example Request</h3>
-                    <pre><code>curl {base_url}/api/inbox/Emma@phoeniximagebot.qzz.io</code></pre>
+                    <pre><code>curl __BASE_URL__/api/inbox/Emma@phoeniximagebot.qzz.io</code></pre>
                 </div>
 
                 <div class="endpoint">
                     <span class="method get">GET</span> <span class="path">/api/message/{msg_id}</span>
                     <p>Get full details of a single message by its ID.</p>
+                    <h3>Example Request</h3>
+                    <pre><code>curl __BASE_URL__/api/message/<msg_id></code></pre>
                 </div>
 
                 <div class="endpoint">
                     <span class="method delete">DELETE</span> <span class="path">/api/message/{msg_id}</span>
                     <p>Delete a specific message.</p>
+                    <h3>Example Request</h3>
+                    <pre><code>curl -X DELETE __BASE_URL__/api/message/<msg_id></code></pre>
                 </div>
 
                 <div class="endpoint">
                     <span class="method get">GET</span> <span class="path">/api/stats</span>
-                    <p>Get service-wide statistics.</p>
+                    <p>Get service-wide statistics (total, active, expired messages).</p>
+                    <h3>Example Request</h3>
+                    <pre><code>curl __BASE_URL__/api/stats</code></pre>
                 </div>
 
                 <div class="endpoint">
-                    <span class="method get">WS</span> <span class="path">/ws/{email}</span>
-                    <p>WebSocket endpoint for real-time email notifications.</p>
+                    <span class="method ws">WS</span> <span class="path">/ws/{email}</span>
+                    <p>WebSocket endpoint for real-time email notifications. Connect and receive new email events instantly.</p>
+                    <h3>Example</h3>
+                    <pre><code>const ws = new WebSocket("wss://phoeniximagebot.qzz.io/ws/Emma@phoeniximagebot.qzz.io");</code></pre>
                 </div>
 
                 <div class="endpoint">
                     <span class="method post">POST</span> <span class="path">/webhook/raw</span>
-                    <p>Webhook for receiving raw email content. Optional <code>X-Secret</code> header for verification.</p>
+                    <p>Webhook for receiving raw email content from Cloudflare Worker or other mail relays. The X-Secret header is optional and only required if WEBHOOK_SECRET is configured.</p>
                     <h3>Example Request</h3>
-                    <pre><code>curl -X POST {base_url}/webhook/raw \\\n  -H "Content-Type: application/json" \\\n  -d '{{
-    "to": "user@phoeniximagebot.qzz.io",
-    "from": "sender@example.com",
-    "raw": "<raw email content>"
-  }}'</code></pre>
+                    <pre><code>curl -X POST __BASE_URL__/webhook/raw \
+  -H "Content-Type: application/json" \
+  -d '{"to": "user@phoeniximagebot.qzz.io", "from": "sender@example.com", "raw": "<raw email content>"}'</code></pre>
                 </div>
             </div>
         </div>
     </body>
     </html>
     """
+    return html.replace("__BASE_URL__", base_url)
 
 # ==================== WEB UI ====================
 async def web_ui():
