@@ -259,60 +259,59 @@ async def ws_endpoint(ws: WebSocket, email: str):
         ws_manager.disconnect(ws, email.lower())
 
 # ==================== WEBHOOK ENDPOINTS ====================
-# These receive emails from mail relay services when SMTP is blocked
 
 @app.post("/webhook/mailgun")
 async def webhook_mailgun(request: Request):
-    """Receive emails from Mailgun Routes"""
     form = await request.form()
+    # Verify signature if key exists
+    if MAILGUN_API_KEY:
+        timestamp = form.get("timestamp")
+        token = form.get("token")
+        signature = form.get("signature")
+        hmac_digest = hmac.new(
+            key=MAILGUN_API_KEY.encode(),
+            msg=f"{timestamp}{token}".encode(),
+            digestmod=hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(signature, hmac_digest):
+            raise HTTPException(401, "Invalid signature")
 
-    recipient = form.get("recipient", "").lower()
-    sender = form.get("sender", "")
-    subject = form.get("subject", "No Subject")
-    body_text = form.get("body-plain", "")
-    body_html = form.get("body-html", "")
-
-    # Handle attachments
-    attachments = []
-    for key in form.keys():
-        if key.startswith("attachment-"):
-            file = form[key]
-            attachments.append({"filename": file.filename, "content_type": file.content_type, "size": 0})
-
-    await store_email(recipient, sender, subject, body_text, body_html, str(dict(form)), attachments)
+    await store_email(
+        recipient=form.get("recipient"),
+        sender=form.get("from"),
+        subject=form.get("subject"),
+        body_text=form.get("body-plain", ""),
+        body_html=form.get("body-html", ""),
+        raw=json.dumps(dict(form)),
+        attachments=[] # Mailgun attachments need separate handling
+    )
     return {"status": "ok"}
 
 @app.post("/webhook/postmark")
 async def webhook_postmark(request: Request):
-    """Receive emails from Postmark Inbound"""
     data = await request.json()
-
-    recipient = data.get("OriginalRecipient", data.get("To", "")).lower()
-    sender = data.get("From", "")
-    subject = data.get("Subject", "No Subject")
-    body_text = data.get("TextBody", "")
-    body_html = data.get("HtmlBody", "")
-
-    attachments = [{"filename": a.get("Name"), "content_type": a.get("ContentType"), "size": a.get("ContentLength", 0)} 
-                   for a in data.get("Attachments", [])]
-
-    await store_email(recipient, sender, subject, body_text, body_html, json.dumps(data), attachments)
+    await store_email(
+        recipient=data.get("To"),
+        sender=data.get("From"),
+        subject=data.get("Subject"),
+        body_text=data.get("TextBody", ""),
+        body_html=data.get("HtmlBody", ""),
+        raw=json.dumps(data),
+        attachments=data.get("Attachments", [])
+    )
     return {"status": "ok"}
 
 @app.post("/webhook/generic")
-async def webhook_generic(request: Request, x_secret: Optional[str] = Header(None)):
-    """Generic webhook - use with any service that can POST email data"""
-    if x_secret != WEBHOOK_SECRET:
+async def webhook_generic(request: Request, secret: Optional[str] = None):
+    if secret and secret != WEBHOOK_SECRET:
         raise HTTPException(401, "Invalid secret")
-
     data = await request.json()
-
     await store_email(
-        recipient=data.get("to", "").lower(),
-        sender=data.get("from", ""),
-        subject=data.get("subject", "No Subject"),
-        body_text=data.get("text", ""),
-        body_html=data.get("html", ""),
+        recipient=data.get("to") or data.get("recipient"),
+        sender=data.get("from") or data.get("sender"),
+        subject=data.get("subject"),
+        body_text=data.get("body_text") or data.get("text", ""),
+        body_html=data.get("body_html") or data.get("html", ""),
         raw=json.dumps(data),
         attachments=data.get("attachments", [])
     )
@@ -333,8 +332,8 @@ async def web_ui():
             .container { max-width: 900px; margin: 0 auto; }
             h1 { text-align: center; margin-bottom: 10px; background: linear-gradient(90deg, #00ff88, #00ccff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-size: 2.5em; }
             .subtitle { text-align: center; color: #888; margin-bottom: 30px; }
-            .card { background: #121228; border: 1px solid #1e1e3f; border-radius: 16px; padding: 24px; margin-bottom: 20px; }
-            .email-display { font-size: 1.4em; font-family: 'SF Mono', monospace; color: #00ff88; margin: 15px 0; word-break: break-all; text-align: center; }
+            .card { background: #121228; border: 1px solid #1e1e3f; border-radius: 16px; padding: 25px; margin-bottom: 25px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+            .email-display { background: #0a0a1a; border: 2px dashed #1e1e3f; border-radius: 12px; padding: 20px; font-size: 1.5em; color: #00ff88; text-align: center; font-weight: 700; word-break: break-all; margin: 15px 0; position: relative; }
             .timer { text-align: center; color: #ff6b6b; font-size: 0.95em; margin: 10px 0; }
             .btn-group { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 15px; }
             button { background: linear-gradient(135deg, #00ff88, #00cc6a); color: #000; border: none; padding: 12px 24px; border-radius: 10px; cursor: pointer; font-weight: 700; font-size: 0.95em; transition: transform 0.2s, box-shadow 0.2s; }
@@ -353,7 +352,8 @@ async def web_ui():
             .preview { color: #aaa; font-size: 0.9em; line-height: 1.5; }
             .empty { text-align: center; color: #555; padding: 50px; font-size: 1.1em; }
             .badge { background: #1e1e3f; color: #00ff88; padding: 4px 10px; border-radius: 20px; font-size: 0.75em; }
-            .count { text-align: center; color: #888; margin-bottom: 15px; }
+            .count-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+            .count { color: #888; }
             @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
             .live { animation: pulse 2s infinite; color: #00ff88; }
             .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; justify-content: center; align-items: center; }
@@ -363,6 +363,8 @@ async def web_ui():
             .close-btn:hover { color: #fff; }
             .modal-body { color: #ccc; line-height: 1.7; }
             .modal-body pre { background: #0a0a1a; padding: 15px; border-radius: 8px; overflow-x: auto; font-size: 0.85em; }
+            #refreshBtn { background: #1e1e3f; color: #00ff88; padding: 6px 12px; border-radius: 8px; font-size: 0.85em; border: 1px solid #1e1e3f; }
+            #refreshBtn:hover { border-color: #00ff88; }
         </style>
     </head>
     <body>
@@ -372,11 +374,11 @@ async def web_ui():
 
             <div class="card">
                 <p style="text-align:center;color:#888;margin-bottom:10px;">Your temporary email address:</p>
-                <div class="email-display" id="email">Click generate to get started</div>
+                <div class="email-display" id="email">Loading...</div>
                 <div class="timer" id="timer"></div>
                 <div class="status" id="status"></div>
                 <div class="btn-group">
-                    <button onclick="generateEmail()">🎲 Generate Random</button>
+                    <button onclick="generateEmail(true)">🎲 New Random</button>
                     <input type="text" id="customInput" placeholder="custom-name" maxlength="30">
                     <button onclick="generateCustom()">✏️ Custom</button>
                     <button class="secondary" onclick="copyEmail()">📋 Copy</button>
@@ -384,9 +386,12 @@ async def web_ui():
             </div>
 
             <div class="card">
-                <div class="count">
-                    <span class="badge live">● LIVE</span>
-                    <span id="msgCount">0 messages</span>
+                <div class="count-header">
+                    <div class="count">
+                        <span class="badge live">● LIVE</span>
+                        <span id="msgCount">0 messages</span>
+                    </div>
+                    <button id="refreshBtn" onclick="loadMessages()">🔄 Refresh</button>
                 </div>
                 <div class="messages" id="messages">
                     <div class="empty">No messages yet. Send an email to your address!</div>
@@ -407,23 +412,46 @@ async def web_ui():
         <script>
             let currentEmail = null, ws = null, expiryTime = null, timerInterval = null, messages = [];
 
-            async function generateEmail() {
+            async function init() {
+                const saved = localStorage.getItem('tempmail_data');
+                if (saved) {
+                    const data = JSON.parse(saved);
+                    // Check if still valid (roughly)
+                    if (Date.now() < data.saved_at + (data.expires_in * 1000)) {
+                        setEmail(data, false);
+                        return;
+                    }
+                }
+                generateEmail(false);
+            }
+
+            async function generateEmail(force = true) {
+                document.getElementById('status').textContent = 'Generating...';
                 const res = await fetch('/api/generate');
                 const data = await res.json();
-                setEmail(data);
+                setEmail(data, true);
             }
 
             async function generateCustom() {
                 const custom = document.getElementById('customInput').value.trim();
-                if (!custom) return generateEmail();
+                if (!custom) return;
+                document.getElementById('status').textContent = 'Generating...';
                 const res = await fetch('/api/generate/' + encodeURIComponent(custom));
                 const data = await res.json();
-                setEmail(data);
+                setEmail(data, true);
             }
 
-            function setEmail(data) {
+            function setEmail(data, save = true) {
                 currentEmail = data.email;
-                expiryTime = Date.now() + (data.expires_in * 1000);
+                if (save) {
+                    data.saved_at = Date.now();
+                    localStorage.setItem('tempmail_data', JSON.stringify(data));
+                    expiryTime = Date.now() + (data.expires_in * 1000);
+                } else {
+                    const remaining = Math.floor((data.saved_at + (data.expires_in * 1000) - Date.now()) / 1000);
+                    expiryTime = Date.now() + (remaining * 1000);
+                }
+                
                 document.getElementById('email').textContent = data.email;
                 document.getElementById('status').textContent = '✅ Active! Send emails to this address.';
                 startTimer();
@@ -439,6 +467,9 @@ async def web_ui():
                     document.getElementById('timer').textContent = remaining > 0 
                         ? `⏱️ Messages expire in: ${m}m ${s}s` 
                         : '⏱️ Expired - generate new email';
+                    if (remaining <= 0) {
+                        localStorage.removeItem('tempmail_data');
+                    }
                 }, 1000);
             }
 
@@ -461,7 +492,9 @@ async def web_ui():
                         loadMessages();
                     }
                 };
-                ws.onclose = () => setTimeout(connectWS, 3000);
+                ws.onclose = () => {
+                    if (currentEmail) setTimeout(connectWS, 3000);
+                };
             }
 
             function showNotification(msg) {
@@ -473,27 +506,33 @@ async def web_ui():
 
             async function loadMessages() {
                 if (!currentEmail) return;
-                const res = await fetch('/api/inbox/' + encodeURIComponent(currentEmail));
-                const data = await res.json();
-                messages = data.messages;
-                document.getElementById('msgCount').textContent = `${data.count} message${data.count !== 1 ? 's' : ''}`;
+                const btn = document.getElementById('refreshBtn');
+                btn.textContent = '⌛ Loading...';
+                try {
+                    const res = await fetch('/api/inbox/' + encodeURIComponent(currentEmail));
+                    const data = await res.json();
+                    messages = data.messages;
+                    document.getElementById('msgCount').textContent = `${data.count} message${data.count !== 1 ? 's' : ''}`;
 
-                const container = document.getElementById('messages');
-                if (data.count === 0) {
-                    container.innerHTML = '<div class="empty">No messages yet. Send an email to your address!</div>';
-                    return;
+                    const container = document.getElementById('messages');
+                    if (data.count === 0) {
+                        container.innerHTML = '<div class="empty">No messages yet. Send an email to your address!</div>';
+                    } else {
+                        container.innerHTML = data.messages.map((m, i) => `
+                            <div class="message" onclick="openModal(${i})" style="cursor:pointer;">
+                                <div class="msg-header">
+                                    <span class="sender">${esc(m.sender)}</span>
+                                    <span style="color:#ff6b6b;font-size:0.8em;">⏱️ ${Math.floor(m.expires_in/60)}m ${m.expires_in%60}s</span>
+                                </div>
+                                <div class="subject">${esc(m.subject)}</div>
+                                <div class="preview">${esc(m.body_text || m.body_html || '').substring(0, 180)}${(m.body_text||m.body_html||'').length > 180 ? '...' : ''}</div>
+                            </div>
+                        `).join('');
+                    }
+                } catch (e) {
+                    console.error(e);
                 }
-
-                container.innerHTML = data.messages.map((m, i) => `
-                    <div class="message" onclick="openModal(${i})" style="cursor:pointer;">
-                        <div class="msg-header">
-                            <span class="sender">${esc(m.sender)}</span>
-                            <span style="color:#ff6b6b;font-size:0.8em;">⏱️ ${Math.floor(m.expires_in/60)}m ${m.expires_in%60}s</span>
-                        </div>
-                        <div class="subject">${esc(m.subject)}</div>
-                        <div class="preview">${esc(m.body_text || m.body_html || '').substring(0, 180)}${(m.body_text||m.body_html||'').length > 180 ? '...' : ''}</div>
-                    </div>
-                `).join('');
+                btn.textContent = '🔄 Refresh';
             }
 
             function openModal(idx) {
@@ -523,7 +562,7 @@ async def web_ui():
                 if (e.target.id === 'modal') closeModal();
             };
 
-            generateEmail();
+            init();
         </script>
     </body>
     </html>
