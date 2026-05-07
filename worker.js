@@ -1,4 +1,10 @@
 export default {
+  async fetch(request, env, ctx) {
+    return new Response('Cloudflare Email Worker is running. Send emails to your configured addresses to forward them to the API.', {
+      headers: { 'content-type': 'text/plain' },
+    });
+  },
+
   async email(message, env, ctx) {
     const url = env.WEBHOOK_URL || 'https://phoeniximagebot.qzz.io/webhook/raw';
     const secret = env.WEBHOOK_SECRET || '';
